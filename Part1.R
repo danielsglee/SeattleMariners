@@ -67,7 +67,6 @@ traindf %>%
   ggplot(aes(x = release_speed, colour = pitch_call)) +
   geom_density()
 
-
 #Assigning Categorical Variable for Balls and Strikes Combination
 traindf <- transform(traindf, BallCount = paste(balls,strikes,sep =''))
 testdf <- transform(testdf, BallCount = paste(balls,strikes,sep =''))
@@ -94,10 +93,10 @@ testdf <- transform(testdf, BallCount = paste(balls,strikes,sep =''))
  
  testdf <- merge(testdf,sample,by = c("umpire_id","batter_side"))
  
- 
  traindf$BorderInclusion <- NA
  testdf$BorderInclusion <- NA
- #Assign Yes and No to included pitches
+
+ #Assign Yes and No to included/excluded pitches
  for(i in 1:302319)(
        if(traindf$StrZoneYD[i] <= traindf$plate_height[i] & traindf$plate_height[i] <= traindf$StrZoneYU[i] & traindf$StrZoneXL[i] <= traindf$plate_side[i] & traindf$plate_side[i] <= traindf$StrZoneXR[i]){
            traindf$BorderInclusion[i] <- "Yes"
@@ -114,7 +113,6 @@ testdf <- transform(testdf, BallCount = paste(balls,strikes,sep =''))
           testdf$BorderInclusion[i] <- "No"
         }
     )
- 
  
  traindf$BorderInclusion <- as.factor(traindf$BorderInclusion)
  testdf$BorderInclusion <- as.factor(testdf$BorderInclusion)
@@ -145,8 +143,8 @@ testdf <- transform(testdf, BallCount = paste(balls,strikes,sep =''))
    select(-c(umpire_id,catcher_id,release_speed,pitcher_id,batter_id,batter_side,pitcher_side,balls,strikes,pitch_type))
  LargeTeDf <- testdf %>%
    select(-c(umpire_id,pitcher_id,batter_id,batter_side,pitcher_side,balls,strikes,pitch_type))
-#Logistic Regression 
- 
+
+#-------Logistic Regression
 training_rows_logit <- SmallTrDf %>%
    select(pitch_call) %>%
    unlist() %>%
@@ -181,8 +179,7 @@ actual_test_pred <- as.data.frame(predict(glm_model,X_test))
   
 model_quality <- confusionMatrix(data = test_pred, reference = Y_test_logit)
 
-#Random Forest
-
+#-------Random Forest
 set.seed(2020)
 RFtraindf <- LargeTrDf %>% select(-catcher_id)
 RFtraindf <- RFtraindf %>% sample_n(50000)
@@ -191,9 +188,7 @@ RFmodel <- randomForest(pitch_call ~ ., data = RFtraindf, ntree = 1000, nodesize
 
 #Tune RF - ntrees: 500 or 1000, although we see tiny decrease of OOB error at 1000
 oob.error.rate <- data.frame(RFmodel$err.rate)
-
 oob.error.rate$Trees <- c(1:1000)
-
 oob.error.plot <- oob.error.rate %>%
   ggplot(aes(x = Trees, y = X1)) +
   geom_line()
@@ -202,16 +197,15 @@ oob.error.plot
 #Tune RF -mtry: 3 is the lowest
 set.seed(2020)
 RFtraindf <- LargeTrDf %>% select(-catcher_id)
-RFtraindf <- RFtraindf %>% sample_n(5000)
-                                    
+RFtraindf <- RFtraindf %>% sample_n(5000)                                   
 oob.values <- vector(length=10)
 
 for(i in 1:10){
   temp.model <- randomForest(pitch_call ~ ., data = RFtraindf, mtry = i, ntree = 1000)
   oob.values[i] <- temp.model$err.rate[nrow(temp.model$err.rate),1]
 }
-#Predict 
 
+#Predict 
 actual_test_pred$RF <- predict(RFmodel,LargeTeDf)
 
 # 3 - Boosted Logistic Regression -----------------------------------------
@@ -222,11 +216,13 @@ library(xgboost)
 
 labels <- traindf$pitch_call
 ts_label <- testdf$is_strike
+
 #one-hot encoding
 new_tr <- LargeTrDf %>% select(-pitch_call)
 new_tr <- as.matrix(one_hot(as.data.table(new_tr)))
 new_ts <- LargeTeDf %>% select(-is_strike)
 new_ts <- as.matrix(one_hot(as.data.table(new_ts)))
+
 #convert factor to numeric
 labels <- as.numeric(labels)-1
 ts_label <- as.numeric(ts_label)-1
@@ -239,13 +235,15 @@ params <- list(booster = "gbtree", objective = "binary:logistic", eta=0.3, gamma
 xgbcv <- xgb.cv( params = params, data = dtrain, nrounds = 100, nfold = 5, showsd = T, stratified = T, print.every.n = 10, early.stop.round = 20, maximize = F)
 
 xgb1 <- xgb.train(params = params, data = dtrain, nrounds = 100, watchlist = list(val=dtest,train=dtrain), print.every.n = 10, early.stop.round = 10, maximize = F , eval_metric = "error")
+
 #model prediction
 xgbpred <- predict (xgb1,dtest)
 xgbpred <- ifelse (xgbpred > 0.5,1,0)
 
+#Final Output (1,0) to LargeTeDf
 LargeTeDf$is_strike <- xgbpred[,1]
-#Handling NA Data - predicting with missing categories
 
+#Handling NA Data - predicting with missing categories
 newdf<- subset(traindf, select = -c(balls,strikes,catcher_id,pitcher_id,batter_id,umpire_id, pitcher_side,BorderInclusion,StrZoneYD,StrZoneYU,StrZoneXL,StrZoneXR))
 
 set.seed(2020)
@@ -254,16 +252,19 @@ newdf <- na.omit(newdf)
 newdf$pitch_call <- factor(newdf$pitch_call)
 RF <- randomForest(pitch_call~.,data = newdf,ntree = 500)
 
+#NAdata <- Data with Erroneous IDs, or any data somehow got skipped <Code Omitted>
+#NAdata2 <- Data with NAs in the predictors<Code Omitted>
+
+#Predict the NA data pitch call
 dummy_pred <- as.data.frame(predict(RF,NAdata))
 dummy_pred2 <- as.data.frame(predict(RFmodel,NAdata2))
 
-#Drop Columns, Match columns for the final output and rbind...
-#Replace 1s to Strike and 0s to Balls
+#Drop Columns, Match columns for the final output and rbind... <Code Omitted>
 
+#Replace 1s to Strike and 0s to Balls
 LargeTeDf$is_strike <- gsub(pattern = "0",x = LargeTeDf$is_strike, replacement = "Ball")
 LargeTeDf$is_strike <- gsub(pattern = "1",x = LargeTeDf$is_strike, replacement = "Strike")
 
 #write CSV
-
 write.csv2(LargeTeDf,file = "StrikeCallPrediction.csv")
 write.xlsx(LargeTeDf,file = "StrikeCallPrediction.xlsx")
